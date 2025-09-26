@@ -1,10 +1,10 @@
-import './styles/app.css';
-import { MicButton } from './components/MicButton';
+import './styles/app.css'
+import { MicButton } from './components/MicButton'
 
 function App() {
     return (
         <div className="mx-auto max-w-3xl p-6">
-            <header className="mb-6">
+            <header className="mb-24">
                 <h1 className="text-2xl font-semibold tracking-tight">
                     WebRTC Live Captioner — Prototype
                 </h1>
@@ -13,11 +13,11 @@ function App() {
                 </p>
             </header>
 
-            <section className="rounded-xl border bg-white p-4 shadow-sm">
+            <section className="rounded-sm border bg-white p-4">
                 <MicButton />
             </section>
         </div>
-    );
+    )
 }
 
-export default App;
+export default App
