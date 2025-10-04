@@ -4,17 +4,16 @@ class Recorder extends AudioWorkletProcessor {
         const chunkMs = (options?.processorOptions?.chunkMs ?? 400) | 0;
 
         this.outSr = 16000;
-        this.inSr = sampleRate;                  // AudioContext's actual rate (often 48000)
-        this.factor = this.inSr / this.outSr;    // 3 for 48k→16k, ~2.756 for 44.1k→16k
+        this.inSr = sampleRate;
+        this.factor = this.inSr / this.outSr;
         this.integerFactor = Number.isInteger(this.factor);
 
         this.chunkSamples = Math.round(this.outSr * (chunkMs / 1000));
         this.index = 0;
 
-        // Buffers/state
-        this.leftover = new Float32Array(0);     // input carried to next process() call
-        this.outBuf = new Float32Array(0);       // accumulated 16k samples waiting to be chunked
-        this.phase = 0;                          // for non-integer-rate resampling
+        this.leftover = new Float32Array(0);  // carryover input
+        this.outBuf = new Float32Array(0);    // accumulated 16k samples
+        this.phase = 0;                       // for non-integer resampling
     }
 
     _concat(a, b) {
@@ -26,41 +25,27 @@ class Recorder extends AudioWorkletProcessor {
     }
 
     _resampleTo16k(input) {
-        // Prepend leftover from last call
         let buf = this._concat(this.leftover, input);
         this.leftover = new Float32Array(0);
 
-        // Fast path: identical sample rate → pass through
-        if (this.inSr === this.outSr) {
-            return { out: buf, leftover: new Float32Array(0), phase: 0 };
-        }
+        if (this.inSr === this.outSr) return { out: buf, leftover: new Float32Array(0) };
 
-        // Fast path: integer decimation (e.g., 48k → 16k)
         if (this.integerFactor) {
-            const step = this.factor | 0;                      // e.g., 3
+            const step = this.factor | 0;
             const outLen = Math.floor(buf.length / step);
             const out = new Float32Array(outLen);
             for (let j = 0, i = 0; j < outLen; j++, i += step) out[j] = buf[i];
             const consumed = outLen * step;
             const leftover = buf.subarray(consumed);
-            return { out, leftover, phase: 0 };
+            return { out, leftover };
         }
 
-        // Generic path: linear interpolation with phase accumulator
-        const step = this.inSr / this.outSr;                 // ~2.75625 for 44.1k → 16k
-        // We need at least 2 samples to interpolate; if not, carry forward.
-        if (buf.length < 2) {
-            return { out: new Float32Array(0), leftover: buf, phase: this.phase };
-        }
+        const step = this.inSr / this.outSr;
+        if (buf.length < 2) return { out: new Float32Array(0), leftover: buf };
 
-        // Estimate safe number of outputs; guard against negatives
         const usable = Math.max(0, buf.length - 1 - this.phase);
         const outLen = Math.floor(usable / step);
-        if (outLen <= 0) {
-            // Not enough input to produce a single sample; keep everything.
-            this.leftover = buf;
-            return { out: new Float32Array(0), leftover: this.leftover, phase: this.phase };
-        }
+        if (outLen <= 0) return { out: new Float32Array(0), leftover: buf };
 
         const out = new Float32Array(outLen);
         let pos = this.phase;
@@ -74,25 +59,19 @@ class Recorder extends AudioWorkletProcessor {
         }
         const consumed = Math.min(buf.length, Math.floor(pos));
         const leftover = buf.subarray(consumed);
-        this.phase = pos - Math.floor(pos); // keep fractional part
-
-        return { out, leftover, phase: this.phase };
+        this.phase = pos - Math.floor(pos);
+        return { out, leftover };
     }
 
     _postChunksFrom(out16k) {
-        // Append to accumulated 16 kHz buffer
         this.outBuf = this._concat(this.outBuf, out16k);
-
-        // While we have at least one full chunk, emit it
         while (this.outBuf.length >= this.chunkSamples) {
             const chunk = this.outBuf.subarray(0, this.chunkSamples);
             const rest = this.outBuf.subarray(this.chunkSamples);
-            // Copy the remainder to a fresh buffer (subarray is a view)
             const next = new Float32Array(rest.length);
             next.set(rest);
             this.outBuf = next;
 
-            // Float32 [-1,1] → Int16
             const pcm16 = new Int16Array(chunk.length);
             for (let i = 0; i < chunk.length; i++) {
                 const s = Math.max(-1, Math.min(1, chunk[i]));
@@ -109,7 +88,6 @@ class Recorder extends AudioWorkletProcessor {
     process(inputs) {
         const ch0 = inputs[0]?.[0];
         if (!ch0) return true;
-
         const { out, leftover } = this._resampleTo16k(ch0);
         this.leftover = leftover;
         if (out.length) this._postChunksFrom(out);
@@ -117,4 +95,16 @@ class Recorder extends AudioWorkletProcessor {
     }
 }
 
-registerProcessor('recorder', Recorder);
+(() => {
+    const g = globalThis;
+    const NAME = 'recorder_v1';
+    if (!g.__RECORDER_V1__) {
+        try {
+            try { console.log('[recorder-worklet] loaded at SR=', sampleRate); } catch {}
+            registerProcessor(NAME, Recorder);
+        } catch (e) {
+            //
+        }
+        g.__RECORDER_V1__ = true;
+    }
+})();

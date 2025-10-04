@@ -1,6 +1,6 @@
-const WebSocket = require('ws');
-const { performance } = require('perf_hooks');
-const wss = new WebSocket.Server({ port: 8787 });
+import { WebSocketServer } from 'ws';
+import { performance } from 'node:perf_hooks';
+const wss = new WebSocketServer({ port: 8787 });
 
 console.log('[asr-sim] listening ws://localhost:8787');
 

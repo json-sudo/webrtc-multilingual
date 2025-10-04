@@ -11,6 +11,10 @@ function App() {
     const [active, setActive] = useState(false);
     const [stats, setStats] = useState({ e2e: {p50:0,p90:0,n:0}, server:{p50:0,p90:0,n:0}, render:{p50:0,p90:0,n:0} });
 
+    const [chunkCount, setChunkCount] = useState(0);
+    const [wsStatus, setWsStatus] = useState<'closed'|'open'|'error'|'connecting'>('connecting');
+
+
     const metrics = useRef(new Metrics());
     const socketRef = useRef<ReturnType<typeof connectSocket> | null>(null);
     const feedRef = useRef<(m: any) => void>(() => {});
@@ -24,6 +28,7 @@ function App() {
 
         const recorder = await createRecorder(400);
         const stream = await recorder.start(({ index, startSec, endSec }) => {
+            setChunkCount(c => c + 1);
             socketRef.current?.sendChunk(index, startSec, endSec);
         });
 
@@ -37,6 +42,9 @@ function App() {
 
         // socket
         const sock = connectSocket();
+        sock.ws.addEventListener('open', () => setWsStatus('open'));
+        sock.ws.addEventListener('close', () => setWsStatus('closed'));
+        sock.ws.addEventListener('error', () => setWsStatus('error'));
         socketRef.current = sock;
 
         sock.onCaption((m) => {
@@ -112,6 +120,9 @@ function App() {
             <header className="mb-6">
                 <h1 className="text-2xl font-semibold">WebRTC Live Captioner — Prototype</h1>
                 <p className="text-sm text-gray-600">Mic → chunks → WS → partial/final captions.</p>
+                <p className="text-xs text-gray-600">
+                    WS: {wsStatus} • chunks: {chunkCount}
+                </p>
             </header>
 
             <div className="flex items-center gap-3">
@@ -128,8 +139,9 @@ function App() {
             <CaptionsPanel feed={feedRef} />
 
             {/* Media element + captions track (driven by mic stream) */}
-            <video ref={videoRef} className="mt-4 w-full rounded-xl bg-black/5" autoPlay playsInline muted />
-            <track id="capt" kind="captions" srcLang="en" default />
+            <video ref={videoRef} className="mt-4 w-full rounded-xl bg-black/5" autoPlay playsInline muted>
+                <track id="capt" kind="captions" srcLang="en" default />
+            </video>
 
             {/* Metrics */}
             <MetricsCard stats={stats} />

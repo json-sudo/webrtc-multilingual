@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "dev:ws": "node server/asr-simulator.cjs",
+    "dev:ws": "node server/asr-simulator.mjs",
     "dev:all": "concurrently -k -n APP,WS \"npm:dev\" \"npm:dev:ws\"",
     "test": "jest --passWithNoTests",
     "test:unit": "jest",

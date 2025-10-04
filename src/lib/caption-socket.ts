@@ -11,6 +11,16 @@ export type CaptionMsg = {
 export function connectSocket(url = import.meta.env.VITE_SOCKET_URL || 'ws://localhost:8787') {
     const ws = new WebSocket(url);
     const listeners: ((m: CaptionMsg) => void)[] = [];
+    const queue: any[] = [];
+    let isOpen = false;
+
+    ws.addEventListener('open', () => {
+        isOpen = true;
+        while (queue.length) ws.send(queue.shift()!);
+    });
+
+    ws.addEventListener('error', (e) => console.warn('[ws] error', e));
+    ws.addEventListener('close', () => console.warn('[ws] closed'));
 
     ws.addEventListener('message', (ev) => {
         try {
@@ -22,8 +32,9 @@ export function connectSocket(url = import.meta.env.VITE_SOCKET_URL || 'ws://loc
     function onCaption(fn: (m: CaptionMsg) => void) { listeners.push(fn); }
 
     function sendChunk(index: number, start: number, end: number) {
-        const t0 = performance.now();
-        ws.send(JSON.stringify({ type: 'chunk', index, startSec: start, endSec: end, t0 }));
+        const payload = JSON.stringify({ type: 'chunk', index, startSec: start, endSec: end, t0: performance.now() });
+        if (isOpen && ws.readyState === WebSocket.OPEN) ws.send(payload);
+        else queue.push(payload); // buffer until open
     }
 
     return { ws, onCaption, sendChunk };
