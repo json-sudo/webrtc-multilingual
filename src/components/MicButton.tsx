@@ -4,7 +4,7 @@ import { createCapture } from '../lib/capture';
 export function MicButton() {
     const [active, setActive] = useState(false);
     const [status, setStatus] = useState<'idle'|'starting'|'active'|'error'>('idle');
-    const [mode, setMode] = useState<'mock'|'real'>('mock');
+    const [mode, setMode] = useState<'mock'|'real'>('real');
 
     const cap = useRef(createCapture());
 
