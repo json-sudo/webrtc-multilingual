@@ -8,10 +8,21 @@ export type CaptionMsg = {
     mt_ms?: number;
 };
 
+const DECODER = new TextDecoder();
+
 export function connectSocket(url = import.meta.env.VITE_SOCKET_URL || 'ws://localhost:8787') {
     const ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+
     const listeners: ((m: CaptionMsg) => void)[] = [];
-    const queue: any[] = [];
+    function onCaption(fn: (m: CaptionMsg) => void) {
+        listeners.push(fn);
+        return () => {
+            const i = listeners.indexOf(fn);
+            if (i >= 0) listeners.splice(i, 1);
+        };
+    }
+    const queue: (string | ArrayBufferLike | Blob | ArrayBufferView)[] = [];
     let isOpen = false;
 
     ws.addEventListener('open', () => {
@@ -22,14 +33,18 @@ export function connectSocket(url = import.meta.env.VITE_SOCKET_URL || 'ws://loc
     ws.addEventListener('error', (e) => console.warn('[ws] error', e));
     ws.addEventListener('close', () => console.warn('[ws] closed'));
 
-    ws.addEventListener('message', (ev) => {
+    ws.addEventListener('message', async (ev) => {
+        let raw: unknown = ev.data;
         try {
-            const msg = JSON.parse(ev.data);
-            if (msg.type === 'caption') listeners.forEach(fn => fn(msg as CaptionMsg));
-        } catch {}
+            if (raw instanceof Blob) raw = await raw.text();
+            else if (raw instanceof ArrayBuffer) raw = DECODER.decode(new Uint8Array(raw));
+            if (typeof raw !== 'string') return;
+            const msg = JSON.parse(raw as string);
+            if (msg?.type === 'caption') listeners.forEach(fn => fn(msg as CaptionMsg));
+        } catch (e) {
+            console.warn('[ws] bad message', e);
+        }
     });
-
-    function onCaption(fn: (m: CaptionMsg) => void) { listeners.push(fn); }
 
     function sendChunk(index: number, start: number, end: number) {
         const payload = JSON.stringify({ type: 'chunk', index, startSec: start, endSec: end, t0: performance.now() });

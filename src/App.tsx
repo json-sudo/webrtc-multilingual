@@ -1,36 +1,64 @@
 import { useState, useRef } from 'react';
 import './styles/app.css';
-// import { MicButton } from './components/MicButton';
 import { createRecorder } from './lib/recorder';
 import { connectSocket } from './lib/caption-socket';
 import { CaptionsPanel } from './components/CaptionsPanel';
-import { Metrics } from './lib/metrics';
-import { MetricsCard } from './components/MetricsCard';
 
 function App() {
     const [active, setActive] = useState(false);
-    const [stats, setStats] = useState({ e2e: {p50:0,p90:0,n:0}, server:{p50:0,p90:0,n:0}, render:{p50:0,p90:0,n:0} });
+    const [currentCaption, setCurrentCaption] = useState<string>('');
 
     const [chunkCount, setChunkCount] = useState(0);
     const [wsStatus, setWsStatus] = useState<'closed'|'open'|'error'|'connecting'>('connecting');
 
 
-    const metrics = useRef(new Metrics());
+    // const metrics = useRef(new Metrics());
     const socketRef = useRef<ReturnType<typeof connectSocket> | null>(null);
+    const offRef = useRef<(() => void) | null>(null);
     const feedRef = useRef<(m: any) => void>(() => {});
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const trackRef = useRef<TextTrack | null>(null);
     const vttOffsetRef = useRef<number | null>(null);
+    const cueMap = useRef<Map<number, VTTCue>>(new Map());
 
     async function start() {
         if (active) return;
 
-        const recorder = await createRecorder(400);
-        const stream = await recorder.start(({ index, startSec, endSec }) => {
-            setChunkCount(c => c + 1);
-            socketRef.current?.sendChunk(index, startSec, endSec);
-        });
+       const sock = connectSocket();
+       socketRef.current = sock;
+       offRef.current = sock.onCaption((m) => {
+           feedRef.current(m);
+           setCurrentCaption(m.text);
+
+           const video = videoRef.current!;
+           const track = trackRef.current!;
+           if (vttOffsetRef.current == null) {
+               vttOffsetRef.current = (video?.currentTime ?? 0) - m.start;
+           }
+           const offset = vttOffsetRef.current ?? 0;
+           const minDuration = 0.6;
+           const start = offset + m.start;
+           let end = offset + Math.max(m.end, m.start + minDuration);
+           if (end <= start) end = start + minDuration;
+
+           let cue = cueMap.current.get(m.index) || null;
+           if (!cue) {
+               cue = new VTTCue(start, end, m.text);
+               cue.id = `c${m.index}`;
+               track.addCue(cue);
+               cueMap.current.set(m.index, cue);
+           } else {
+               cue.startTime = start;
+               cue.endTime = end;
+               cue.text = m.text;
+           }
+       });
+
+       const recorder = await createRecorder(400);
+       const stream = await recorder.start(({index, startSec, endSec}) => {
+           socketRef.current?.sendChunk(index, startSec, endSec);
+       })
 
         // Drive the <video> clock with the mic stream
         const video = videoRef.current!;
@@ -40,70 +68,12 @@ function App() {
         const trackEl = document.getElementById('capt') as HTMLTrackElement;
         trackRef.current = trackEl.track;
 
-        // socket
-        const sock = connectSocket();
-        sock.ws.addEventListener('open', () => setWsStatus('open'));
-        sock.ws.addEventListener('close', () => setWsStatus('closed'));
-        sock.ws.addEventListener('error', () => setWsStatus('error'));
-        socketRef.current = sock;
-
-        sock.onCaption((m) => {
-            // --- Metrics: E2E & server compute ---
-            const tRecv = performance.now();
-            const e2e = tRecv - (m.t0 ?? tRecv);
-            metrics.current.pushE2E(e2e);
-            const srvCompute = (m.asr_ms ?? 0) + (m.mt_ms ?? 0);
-            metrics.current.pushSrv(srvCompute);
-
-            // --- Feed the panel (keeps partials/finals visible) ---
-            feedRef.current(m);
-
-            // --- WebVTT: add/replace cue mapped to <video> time ---
-            const tr = trackRef.current!;
-            const cueId = `c${m.index}`;
-            if (vttOffsetRef.current == null) {
-                // anchor offset on first caption
-                vttOffsetRef.current = video.currentTime - m.start;
-            }
-            const offset = vttOffsetRef.current;
-            const start = offset + m.start;
-            const end   = offset + Math.max(m.end, m.start + 0.6);
-
-            // Find existing cue by id
-            let cue: VTTCue | null = null;
-            const cues = tr.cues;
-            if (cues) {
-                for (let i = 0; i < cues.length; i++) {
-                    const c = cues[i] as VTTCue;
-                    if (c.id === cueId) { cue = c; break; }
-                }
-            }
-
-            const renderStart = performance.now();
-            if (cue) {
-                // update
-                cue.startTime = start;
-                cue.endTime = end;
-                cue.text = m.text;
-            } else {
-                cue = new VTTCue(start, end, m.text);
-                cue.id = cueId;
-                tr.addCue(cue);
-            }
-            const renderMs = performance.now() - renderStart;
-            metrics.current.pushRender(renderMs);
-
-            // Periodically refresh the visible stats
-            if ((metrics.current.e2e.length % 5) === 0) {
-                setStats(metrics.current.snapshot());
-            }
-        });
-
-        (window as any).__recorder = recorder;
         setActive(true);
     }
 
     function stop() {
+        offRef.current?.();
+        offRef.current = null;
         socketRef.current?.ws.close();
         (window as any).__recorder?.stop?.();
         const video = videoRef.current!;
@@ -112,6 +82,8 @@ function App() {
             video.srcObject = null;
         }
         vttOffsetRef.current = null;
+        cueMap.current.clear();
+        setCurrentCaption('');
         setActive(false);
     }
 
@@ -135,16 +107,16 @@ function App() {
                 )}
             </div>
 
-            {/* Live captions panel */}
+            <div className="mt-3 rounded-xl border bg-white p-3 text-lg font-medium min-h-[3rem]">
+                {currentCaption || '…'}
+            </div>
+
             <CaptionsPanel feed={feedRef} />
 
             {/* Media element + captions track (driven by mic stream) */}
             <video ref={videoRef} className="mt-4 w-full rounded-xl bg-black/5" autoPlay playsInline muted>
                 <track id="capt" kind="captions" srcLang="en" default />
             </video>
-
-            {/* Metrics */}
-            <MetricsCard stats={stats} />
         </div>
     );
 }
